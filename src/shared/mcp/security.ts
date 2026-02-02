@@ -22,12 +22,13 @@ export function validateOrigin(headers: Headers, isDev: boolean): void {
   }
 }
 
-// All protocol versions we support (must match dispatcher.ts)
+// Supported protocol versions - accept both current and previous versions
+// to maintain compatibility with clients that may not have updated yet
 const SUPPORTED_PROTOCOL_VERSIONS = [
-  '2025-06-18',
-  '2025-03-26',
-  '2024-11-05',
-  '2024-10-07',
+  '2025-11-25', // Latest
+  '2025-06-18', // Previous (widely used)
+  '2025-03-26', // Legacy
+  '2024-11-05', // Legacy
 ];
 
 export function validateProtocolVersion(headers: Headers, _expected: string): void {
