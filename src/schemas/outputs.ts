@@ -3,7 +3,7 @@
  * Define the shape of data returned by MCP tools.
  */
 
-import { z } from 'zod';
+import * as z from 'zod/v4';
 
 /**
  * Tesla vehicle state output schema.

@@ -7,7 +7,7 @@
  * the fields we need.
  */
 
-import { z } from 'zod';
+import * as z from 'zod/v4';
 
 /** Raw vehicle state from Tessie API */
 export const TessieVehicleStateSchema = z

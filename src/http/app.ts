@@ -1,42 +1,56 @@
-// Unified MCP server entry point (Node.js/Hono) using shared modules
-
-import type { HttpBindings } from '@hono/node-server';
 import { Hono } from 'hono';
-import { createMcpSecurityMiddleware } from '../adapters/http-hono/middleware.security.js';
-import { config } from '../config/env.js';
-import { serverMetadata } from '../config/metadata.js';
-import { buildServer } from '../core/mcp.js';
-import { parseConfig } from '../shared/config/env.js';
-import { createAuthHeaderMiddleware } from './middlewares/auth.js';
-import { corsMiddleware } from './middlewares/cors.js';
-import { healthRoutes } from './routes/health.js';
-import { buildMcpRoutes } from './routes/mcp.js';
+import type { AppConfig } from '../config/env.js';
+import { createMcpRuntime } from '../core/runtime.js';
+import type { TessieToolService } from '../shared/tools/registry.js';
+import { logger } from '../utils/logger.js';
+import { mcpAuthResponse } from './auth.js';
+import { boundedMcpRequest } from './body.js';
+import {
+  corsPreflightResponse,
+  requestSecurityResponse,
+  withCors,
+} from './security.js';
 
-export function buildHttpApp(): Hono<{ Bindings: HttpBindings }> {
-  const app = new Hono<{ Bindings: HttpBindings }>();
-
-  // Parse unified config
-  const unifiedConfig = parseConfig(process.env as Record<string, unknown>);
-
-  // Build MCP server
-  const server = buildServer({
-    name: config.MCP_TITLE || serverMetadata.title,
-    version: config.MCP_VERSION,
-    instructions: config.MCP_INSTRUCTIONS || serverMetadata.instructions,
+export interface HttpRuntimeOptions {
+  runtimeName: string;
+  service?: TessieToolService;
+}
+export interface HttpRuntime {
+  fetch(request: Request): Promise<Response>;
+  close(): Promise<void>;
+}
+export function buildHttpApp(
+  config: AppConfig,
+  options: HttpRuntimeOptions,
+): HttpRuntime {
+  logger.setLevel(config.LOG_LEVEL);
+  const mcp = createMcpRuntime(config, options.service);
+  const mcpPath = config.MCP_PUBLIC_URL.pathname;
+  const app = new Hono();
+  app.use('*', async (context, next) => {
+    const rejected = requestSecurityResponse(context.req.raw, config);
+    if (rejected) return rejected;
+    await next();
   });
-
-  const transports = new Map();
-
-  // Global middleware
-  app.use('*', corsMiddleware());
-  app.use('*', createAuthHeaderMiddleware());
-
-  // Routes
-  app.route('/', healthRoutes());
-
-  // MCP endpoint with security
-  app.use('/mcp', createMcpSecurityMiddleware(unifiedConfig));
-  app.route('/mcp', buildMcpRoutes({ server, transports }));
-
-  return app;
+  app.get('/health', (context) =>
+    context.json({
+      status: 'ok',
+      runtime: options.runtimeName,
+      protocol: '2026-07-28',
+      legacyMode: config.MCP_LEGACY_MODE,
+      authEnabled: config.AUTH_ENABLED,
+      timestamp: new Date().toISOString(),
+    }),
+  );
+  app.options(mcpPath, (context) => corsPreflightResponse(context.req.raw));
+  app.all(mcpPath, async (context) => {
+    const request = context.req.raw;
+    const authRejection = await mcpAuthResponse(request, config);
+    if (authRejection) return withCors(request, authRejection);
+    const bounded = await boundedMcpRequest(request, config.MCP_MAX_REQUEST_BYTES);
+    if (bounded.rejection) return withCors(request, bounded.rejection);
+    return withCors(request, await mcp.fetch(bounded.request));
+  });
+  app.notFound((context) => context.text('Not Found', 404));
+  return { fetch: async (request) => app.fetch(request), close: mcp.close };
 }

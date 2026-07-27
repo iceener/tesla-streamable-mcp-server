@@ -7,7 +7,8 @@
  * Credentials are read from environment secrets (wrangler secrets).
  */
 
-import type { z } from 'zod';
+import type * as z from 'zod/v4';
+import type { AppConfig } from '../config/env.js';
 import { COMMAND_META, type TeslaCommand } from '../schemas/commands.js';
 import {
   CommandResultSchema,
@@ -68,6 +69,9 @@ export interface VehicleState {
 export interface TessieClientOptions {
   accessToken: string;
   vin: string;
+  rpsLimit?: number;
+  concurrencyLimit?: number;
+  signal?: AbortSignal;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -142,6 +146,12 @@ export class TessieClient {
       },
       timeout: 90000, // 90s - Tessie waits for vehicle wake
       retries: 2,
+      rateLimit: {
+        rps: options.rpsLimit ?? 10,
+        burst: (options.rpsLimit ?? 10) * 2,
+      },
+      concurrency: options.concurrencyLimit ?? 5,
+      signal: options.signal,
     });
   }
 
@@ -267,30 +277,27 @@ export class TessieClient {
 // Factory
 // ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * Get Tessie credentials from environment
- */
-function getTessieCredentials(): { accessToken: string; vin: string } {
-  const accessToken = process.env.TESSIE_ACCESS_TOKEN;
-  const vin = process.env.TESSIE_VIN;
-
-  if (!accessToken) {
+/** Create a Tessie client from server-side deployment credentials. */
+export function createTessieClient(
+  config: Pick<
+    AppConfig,
+    'TESSIE_ACCESS_TOKEN' | 'TESSIE_VIN' | 'RPS_LIMIT' | 'CONCURRENCY_LIMIT'
+  >,
+  signal?: AbortSignal,
+): TessieClient {
+  if (!config.TESSIE_ACCESS_TOKEN) {
     throw new Error(
       'TESSIE_ACCESS_TOKEN not configured. Run: wrangler secret put TESSIE_ACCESS_TOKEN',
     );
   }
-
-  if (!vin) {
+  if (!config.TESSIE_VIN) {
     throw new Error('TESSIE_VIN not configured. Run: wrangler secret put TESSIE_VIN');
   }
-
-  return { accessToken, vin };
-}
-
-/**
- * Create a Tessie client using environment credentials
- */
-export function createTessieClient(): TessieClient {
-  const { accessToken, vin } = getTessieCredentials();
-  return new TessieClient({ accessToken, vin });
+  return new TessieClient({
+    accessToken: config.TESSIE_ACCESS_TOKEN,
+    vin: config.TESSIE_VIN,
+    rpsLimit: config.RPS_LIMIT,
+    concurrencyLimit: config.CONCURRENCY_LIMIT,
+    signal,
+  });
 }

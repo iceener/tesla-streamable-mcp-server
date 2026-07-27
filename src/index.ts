@@ -1,63 +1,36 @@
-import { serve } from '@hono/node-server';
-import { config } from './config/env.js';
-import { stopContextCleanup } from './core/context.js';
+import { parseConfig } from './config/env.js';
 import { buildHttpApp } from './http/app.js';
-import { FileTokenStore } from './shared/storage/file.js';
-import { MemorySessionStore } from './shared/storage/memory.js';
-import { initializeStorage } from './shared/storage/singleton.js';
 import { logger } from './utils/logger.js';
 
-// Store references for graceful shutdown
-let tokenStore: FileTokenStore | null = null;
-let sessionStore: MemorySessionStore | null = null;
-
-async function main(): Promise<void> {
-  try {
-    // Initialize storage singleton with encryption
-    tokenStore = new FileTokenStore(config.RS_TOKENS_FILE, config.RS_TOKENS_ENC_KEY);
-    sessionStore = new MemorySessionStore();
-    initializeStorage(tokenStore, sessionStore);
-
-    const app = buildHttpApp();
-    serve({ fetch: app.fetch, port: config.PORT, hostname: config.HOST });
-
-    await logger.info('server', {
-      message: `MCP server started on http://${config.HOST}:${config.PORT}`,
-      environment: config.NODE_ENV,
-      authEnabled: config.AUTH_ENABLED,
-      tokenEncryption: Boolean(config.RS_TOKENS_ENC_KEY),
-    });
-  } catch (error) {
-    console.error('Failed to start server:', error);
-    await logger.error('server', {
-      message: 'Server startup failed',
-      error: (error as Error).message,
-    });
-    process.exit(1);
-  }
+const config = parseConfig(process.env);
+const runtime = buildHttpApp(config, { runtimeName: 'bun' });
+const server = Bun.serve({
+  hostname: config.HOST,
+  port: config.PORT,
+  fetch: (request) => runtime.fetch(request),
+});
+logger.info('server', {
+  message: 'Tesla MCP server started',
+  url: config.MCP_PUBLIC_URL.href,
+  protocol: '2026-07-28',
+  legacyMode: config.MCP_LEGACY_MODE,
+});
+let shuttingDown = false;
+async function shutdown(signal: string): Promise<void> {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  logger.info('server', { message: 'Shutting down', signal });
+  const gracefulStop = server.stop(false);
+  await runtime.close();
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const stopped = await Promise.race([
+    gracefulStop.then(() => true),
+    new Promise<false>((resolve) => {
+      timeout = setTimeout(() => resolve(false), 5_000);
+    }),
+  ]);
+  if (timeout) clearTimeout(timeout);
+  if (!stopped) await server.stop(true);
 }
-
-function gracefulShutdown(signal: string): void {
-  void logger.info('server', { message: `Received ${signal}, shutting down` });
-
-  // Stop cleanup intervals
-  stopContextCleanup();
-
-  // Flush token store to disk and stop its cleanup
-  if (tokenStore) {
-    tokenStore.flush();
-    tokenStore.stopCleanup();
-  }
-
-  // Stop session store cleanup
-  if (sessionStore) {
-    sessionStore.stopCleanup();
-  }
-
-  process.exit(0);
-}
-
-process.on('SIGINT', () => gracefulShutdown('SIGINT'));
-process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
-
-void main();
+process.once('SIGINT', () => void shutdown('SIGINT'));
+process.once('SIGTERM', () => void shutdown('SIGTERM'));

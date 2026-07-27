@@ -2,18 +2,22 @@
 
 Streamable HTTP MCP server for Tesla vehicle control via the [Tessie API](https://developer.tessie.com).
 
+> **Release status (2026-07-27):** this repository pins `@modelcontextprotocol/server` and the test-only `@modelcontextprotocol/client` to `2.0.0-beta.5`, with Zod 4 and the candidate `2026-07-28` protocol. The dated protocol and stable v2 SDK are not final at this commit; do not claim final conformance until the release gate is verified.
+
+The Bun and Cloudflare Workers entry points share one fetch-native handler per deployment and create a fresh MCP server for every request. Modern HTTP is stateless; compatibility with 2025-era clients uses the SDK's stateless fallback and does not create MCP sessions.
+
 Author: [overment](https://x.com/_overment)
 
 > [!WARNING]
 > You connect this server to your MCP client at your own responsibility. Language models can make mistakes, misinterpret instructions, or perform unintended actions. Always verify commands before execution, especially for actions like unlocking, opening trunks, or sending navigation destinations.
 >
-> The HTTP layer is designed for convenience during development, not production-grade security. If deploying remotely, harden it: proper token validation, secure storage, TLS termination, strict CORS/origin checks, rate limiting, and audit logging.
+> The HTTP layer enforces bounded request bodies, exact Host and Origin allowlists, strict CORS, and static bearer authentication when enabled. A production deployment must still set its real HTTPS `MCP_PUBLIC_URL` and exact allowlists, protect secrets, and provide appropriate rate limiting and audit controls.
 
 ## Notice
 
 This repo works in two ways:
-- As a **Node/Hono server** for local workflows
-- As a **Cloudflare Worker** for remote interactions
+- As a fetch-native **Bun server** for local workflows
+- As a fetch-native **Cloudflare Worker** for remote interactions
 
 ## Features
 
@@ -117,29 +121,9 @@ Endpoint: `http://127.0.0.1:8787/mcp`
 
 ### 3. Cloudflare Worker (Deploy)
 
-1. Create KV namespace for session storage:
+1. Update `wrangler.jsonc` for the production URL and exact Host/Origin allowlists. The checked-in values are local-safe defaults. The existing `TOKENS` binding is retained for deployment compatibility but is not used for MCP sessions.
 
-```bash
-bun x wrangler kv:namespace create TOKENS
-```
-
-Output will show:
-```
-Add the following to your wrangler.toml:
-[[kv_namespaces]]
-binding = "TOKENS"
-id = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
-```
-
-2. Update `wrangler.toml` with your KV namespace ID:
-
-```toml
-[[kv_namespaces]]
-binding = "TOKENS"
-id = "your-kv-namespace-id-from-step-1"
-```
-
-3. Set secrets:
+2. Set secrets:
 
 ```bash
 # Generate a random token for client authentication
@@ -155,10 +139,13 @@ bun x wrangler secret put TESSIE_VIN
 # Paste your VIN when prompted
 ```
 
-4. Deploy:
+3. Validate generated types and deploy:
 
 ```bash
-bun x wrangler deploy
+bun run types:worker
+bun run types:worker:check
+bun run build:worker
+bun run deploy
 ```
 
 Endpoint: `https://<worker-name>.<account>.workers.dev/mcp`
@@ -412,8 +399,11 @@ Execute commands on your Tesla vehicle.
 bun dev           # Start with hot reload
 bun run typecheck # TypeScript check
 bun run lint      # Lint code
-bun run build     # Production build
-bun start         # Run production
+bun run build     # Bun production build
+bun run build:worker
+bun run types:worker:check
+bun test           # Modern, legacy, cancellation, security, and provider tests
+bun start          # Run Bun production entry point
 ```
 
 ---
@@ -434,8 +424,12 @@ src/
 │   └── tessie.ts               # Tessie API response schemas
 ├── config/
 │   └── metadata.ts             # Server & tool descriptions
-├── index.ts                    # Node.js entry
-└── worker.ts                   # Workers entry
+├── core/
+│   ├── mcp.ts                  # Fresh server factory
+│   └── runtime.ts              # Deployment-scoped v2 handler
+├── http/                       # Auth, body bounds, Host/Origin/CORS
+├── index.ts                    # Bun entry
+└── worker.ts                   # Workers isolate entry
 ```
 
 ---
@@ -454,12 +448,14 @@ src/
 | `AUTH_ENABLED` | | Enable auth (default: true) |
 | `AUTH_STRATEGY` | | `bearer` (default) |
 
-### Cloudflare Workers (wrangler.toml + secrets)
+### Cloudflare Workers (`wrangler.jsonc` + secrets)
 
-**wrangler.toml vars:**
-```toml
-AUTH_ENABLED = "true"
-AUTH_STRATEGY = "bearer"
+Relevant `wrangler.jsonc` vars:
+```jsonc
+"vars": {
+  "AUTH_ENABLED": "true",
+  "AUTH_STRATEGY": "bearer"
+}
 ```
 
 **Secrets (set via `wrangler secret put`):**
@@ -467,12 +463,7 @@ AUTH_STRATEGY = "bearer"
 - `TESSIE_ACCESS_TOKEN` — Tessie API access token
 - `TESSIE_VIN` — Your vehicle's VIN
 
-**KV Namespace:**
-```toml
-[[kv_namespaces]]
-binding = "TOKENS"
-id = "your-kv-namespace-id"
-```
+The existing `TOKENS` binding remains in `wrangler.jsonc`, but the SDK-owned stateless HTTP fallback does not read it or create sessions.
 
 ---
 
@@ -487,7 +478,6 @@ id = "your-kv-namespace-id"
 | Vehicle not found | Check `TESSIE_VIN` is correct (17 characters) |
 | Vehicle offline | Vehicle may be in deep sleep. Commands will wake it (takes ~30s) |
 | Command timeout | Tessie waits up to 90s for vehicle wake. Try again. |
-| KV namespace error | Run `wrangler kv:namespace create TOKENS` and update wrangler.toml |
 | "ReadableStream is not defined" | Node.js version too old (needs 18+). Use full path to newer node. |
 | "spawn bunx ENOENT" | Claude Desktop can't find `bunx`. Use `npx` instead. |
 

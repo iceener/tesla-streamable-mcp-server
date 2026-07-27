@@ -11,9 +11,8 @@
  * - Sentry mode
  */
 
-import { z } from 'zod';
+import * as z from 'zod/v4';
 import { TeslaStateOutput } from '../../schemas/outputs.js';
-import { createTessieClient } from '../../services/tessie.service.js';
 import { defineTool, type ToolContext, type ToolResult } from './types.js';
 
 const inputSchema = z.object({});
@@ -37,7 +36,7 @@ Use this tool to answer questions like:
 - "Is the climate on?"
 - "Is my car charging?"`,
   inputSchema: z.object({}),
-  outputSchema: TeslaStateOutput.shape,
+  outputSchema: TeslaStateOutput,
   annotations: {
     title: 'Get Tesla State',
     readOnlyHint: true,
@@ -47,11 +46,10 @@ Use this tool to answer questions like:
   },
   handler: async (
     _args: z.infer<typeof inputSchema>,
-    _context: ToolContext,
+    context: ToolContext,
   ): Promise<ToolResult> => {
     try {
-      const client = createTessieClient();
-      const state = await client.getState();
+      const state = await context.tessie.getState(context.signal);
 
       // Format human-readable summary
       const summary = formatStateSummary(state);

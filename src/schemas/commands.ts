@@ -3,7 +3,7 @@
  * Defines available vehicle commands and their metadata.
  */
 
-import { z } from 'zod';
+import * as z from 'zod/v4';
 
 /**
  * Available Tesla vehicle commands.

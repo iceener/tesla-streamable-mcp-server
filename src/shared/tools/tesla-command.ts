@@ -5,10 +5,9 @@
  * Supports: lock, unlock, climate, trunk, charge port, sentry, flash, honk
  */
 
-import { z } from 'zod';
+import * as z from 'zod/v4';
 import { type TeslaCommand, TeslaCommandSchema } from '../../schemas/commands.js';
 import { TeslaCommandOutput } from '../../schemas/outputs.js';
-import { createTessieClient } from '../../services/tessie.service.js';
 import { defineTool, type ToolContext, type ToolResult } from './types.js';
 
 const inputSchema = z.object({
@@ -80,7 +79,7 @@ export const teslaCommandTool = defineTool({
 - "Navigate to the airport" → { command: "share", destination: "SFO Airport" }
 - "Take me to 123 Main St" → { command: "share", destination: "123 Main St, San Francisco" }`,
   inputSchema,
-  outputSchema: TeslaCommandOutput.shape,
+  outputSchema: TeslaCommandOutput,
   annotations: {
     title: 'Tesla Command',
     readOnlyHint: false,
@@ -90,7 +89,7 @@ export const teslaCommandTool = defineTool({
   },
   handler: async (
     args: z.infer<typeof inputSchema>,
-    _context: ToolContext,
+    context: ToolContext,
   ): Promise<ToolResult> => {
     const { command, temperature, destination, locale } = args;
 
@@ -121,12 +120,11 @@ export const teslaCommandTool = defineTool({
     }
 
     try {
-      const client = createTessieClient();
-      const result = await client.executeCommand(command as TeslaCommand, {
-        temperature,
-        destination,
-        locale,
-      });
+      const result = await context.tessie.executeCommand(
+        command as TeslaCommand,
+        { temperature, destination, locale },
+        context.signal,
+      );
 
       const icon = result.success ? '✓' : '⚠️';
       const text = `${icon} ${result.message}`;
