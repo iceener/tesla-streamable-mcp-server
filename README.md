@@ -1,3 +1,5 @@
+[![MseeP.ai Security Assessment Badge](https://mseep.net/pr/iceener-tesla-streamable-mcp-server-badge.png)](https://mseep.ai/app/iceener-tesla-streamable-mcp-server)
+
 # Tesla MCP Server
 
 Streamable HTTP MCP server for Tesla vehicle control via the [Tessie API](https://developer.tessie.com).
